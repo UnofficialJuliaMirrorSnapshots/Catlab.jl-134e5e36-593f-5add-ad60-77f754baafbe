@@ -29,7 +29,6 @@ using Base.Meta: ParseError
 using AutoHashEquals
 using DataStructures: OrderedDict
 using Match
-using Nullables
 
 using ..Meta
 
@@ -48,10 +47,10 @@ const Context = OrderedDict{Symbol,Expr0}
   name::Symbol
   params::Vector{Symbol}
   context::Context
-  doc::Nullable{String}
+  doc::Union{String,Nothing}
   
   function TypeConstructor(name::Symbol, params::Vector,
-                           context::Context, doc=Nullable{String}())
+                           context::Context, doc=nothing)
     new(name, params, context, doc)
   end
 end
@@ -63,10 +62,10 @@ end
   params::Vector{Symbol}
   typ::Expr0
   context::Context
-  doc::Nullable{String}
+  doc::Union{String,Nothing}
   
   function TermConstructor(name::Symbol, params::Vector, typ::Expr0,
-                           context::Context, doc=Nullable{String}())
+                           context::Context, doc=nothing)
     new(name, params, typ, context, doc)
   end
 end
@@ -138,7 +137,7 @@ macro signature(head, body)
 end
 function signature_code(main_class, base_mod, base_params)
   # Add types/terms/functions from base class, if provided.
-  if base_mod == nothing
+  if isnothing(base_mod)
     class = main_class
   else
     base_class = base_mod.class()
@@ -543,7 +542,7 @@ function instance_code(mod, instance_types, instance_fns)
   for (sig, f) in bound_fns
     if haskey(instance_fns, sig)
       f_impl = instance_fns[sig]
-    elseif !isnull(f.impl)
+    elseif !isnothing(f.impl)
       f_impl = f
     else
       error("Method $(f.call_expr) not implemented in $(class.name) instance")
@@ -581,7 +580,7 @@ function invoke_term(signature_module::Module, instance_types::Tuple,
     # in syntax system.
     signature = signature_module.class().signature
     index = findfirst(cons -> cons.name == constructor_name, signature.types)
-    if index == nothing
+    if isnothing(index)
       # Case 2: Name refers to term constructor.
       # FIXME: Terms constructors can be overloaded, so there may be multiple
       # term constructors with the same name. Distinguishing them requires type
