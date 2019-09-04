@@ -65,7 +65,12 @@ function Base.show(io::IO, expr::GATExpr)
   print(io, ")")
 end
 function Base.show(io::IO, expr::GATExpr{:generator})
-  print(io, first(expr))
+  value = first(expr)
+  if isnothing(value)
+    show(io, value) # Value `nothing` cannot be printed
+  else
+    print(io, value)
+  end
 end
 
 struct SyntaxDomainError <: Exception
@@ -126,7 +131,7 @@ function syntax_code(name::Symbol, base_types::Vector{Type},
       # https://github.com/JuliaLang/julia/issues/28991
       LineNumberNode(0);
       Expr(:export, [cons.name for cons in signature.types]...);
-      Expr(:using, map(Symbol, split(string(outer_module), "."))...);
+      Expr(:using, Expr(:., :., :., nameof(outer_module)));
       :(signature() = $signature_ref);
       gen_types(signature, base_types);
       gen_type_accessors(signature);

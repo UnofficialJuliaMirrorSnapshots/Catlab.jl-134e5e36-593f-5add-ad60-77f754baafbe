@@ -15,7 +15,7 @@ References:
   https://www.eclipse.org/elk/documentation/tooldevelopers/graphdatastructure/jsonformat.html
 """
 module JSONWiringDiagrams
-export read_json_graph, write_json_graph,
+export read_json_graph, parse_json_graph, write_json_graph, generate_json_graph,
   convert_from_json_graph_data, convert_to_json_graph_data
 
 using DataStructures: OrderedDict
@@ -29,24 +29,27 @@ const JSONObject = OrderedDict{String,Any}
 # Serialization
 ###############
 
-""" Serialize a wiring diagram in JSON graph format.
+""" Write a wiring diagram to a file as JSON.
 """
-function write_json_graph(diagram::WiringDiagram)::AbstractDict
-  write_json_box(diagram, Int[])
-end
 function write_json_graph(diagram::WiringDiagram, filename::String;
                           indent::Union{Int,Nothing}=nothing)
   open(filename, "w") do io
-    JSON.print(io, write_json_graph(diagram), indent)
+    JSON.print(io, generate_json_graph(diagram), indent)
   end
 end
 
-function write_json_box(diagram::WiringDiagram, path::Vector{Int})
-  JSONObject(
+""" Generate a JSON dict representing a wiring diagram.
+"""
+function generate_json_graph(diagram::WiringDiagram)::AbstractDict
+  generate_json_box(diagram, Int[])
+end
+
+function generate_json_box(diagram::WiringDiagram, path::Vector{Int})
+  json_object_with_value(diagram.value,
     "id" => box_id(path),
-    "ports" => write_json_ports(diagram),
+    "ports" => generate_json_ports(diagram),
     "children" => [
-      write_json_box(box(diagram, v), [path; v]) for v in box_ids(diagram)
+      generate_json_box(box(diagram, v), [path; v]) for v in box_ids(diagram)
     ],
     "edges" => [
       json_object_with_value(wire.value,
@@ -61,14 +64,14 @@ function write_json_box(diagram::WiringDiagram, path::Vector{Int})
   )
 end
 
-function write_json_box(box::Box, path::Vector{Int})
+function generate_json_box(box::Box, path::Vector{Int})
   json_object_with_value(box.value,
     "id" => box_id(path),
-    "ports" => write_json_ports(box),
+    "ports" => generate_json_ports(box),
   )
 end
 
-function write_json_ports(box::AbstractBox)::AbstractArray
+function generate_json_ports(box::AbstractBox)::AbstractArray
   [
     [
       json_object_with_value(port,
@@ -101,32 +104,41 @@ convert_to_json_graph_data(x) = convert_to_graph_data(x)
 # Deserialization
 #################
 
-""" Deserialize a wiring diagram from JSON graph format.
+""" Read a wiring diagram from a JSON file.
 """
 function read_json_graph(
-    ::Type{BoxValue}, ::Type{PortValue}, ::Type{WireValue},
-    node::AbstractDict)::WiringDiagram where {BoxValue, PortValue, WireValue}
-  diagram, ports = read_json_box(BoxValue, PortValue, WireValue, node)
-  diagram
-end
-function read_json_graph(
     BoxValue::Type, PortValue::Type, WireValue::Type, filename::String)
-  read_json_graph(BoxValue, PortValue, WireValue, JSON.parsefile(filename))
+  parse_json_graph(BoxValue, PortValue, WireValue, JSON.parsefile(filename))
 end
 
-function read_json_box(
+""" Parse a wiring diagram from a JSON string or dict.
+"""
+function parse_json_graph(
+    BoxValue::Type, PortValue::Type, WireValue::Type, s::Union{AbstractString,IO})
+  parse_json_graph(BoxValue, PortValue, WireValue, JSON.parse(s))
+end
+function parse_json_graph(
+    ::Type{BoxValue}, ::Type{PortValue}, ::Type{WireValue},
+    node::AbstractDict)::WiringDiagram where {BoxValue, PortValue, WireValue}
+  diagram, ports = parse_json_box(BoxValue, PortValue, WireValue, node)
+  diagram
+end
+
+function parse_json_box(
     BoxValue::Type, PortValue::Type, WireValue::Type, node::AbstractDict)
   # Read the ports of the box.
-  ports, input_ports, output_ports = read_json_ports(PortValue, node)
+  ports, input_ports, output_ports = parse_json_ports(PortValue, node)
 
   # Dispense with case when node is an atomic box.
   if !haskey(node, "children")
-    value = read_json_graph_data(BoxValue, node)
+    value = parse_json_graph_data(BoxValue, node)
     return (Box(value, input_ports, output_ports), ports)
   end
 
   # If we get here, we're reading a wiring diagram.
-  diagram = WiringDiagram(input_ports, output_ports)
+  # FIXME: We should not assume that diagram data has same type as box data.
+  value = haskey(node, "properties") ? parse_json_graph_data(BoxValue, node) : nothing
+  diagram = WiringDiagram(value, input_ports, output_ports)
   all_ports = Dict{Tuple{String,String},Port}()
   for (key, port_data) in ports
     all_ports[key] = port_data.kind == InputPort ?
@@ -136,7 +148,7 @@ function read_json_box(
 
   # Read the nodes recursively.
   for subnode in node["children"]
-    box, subports = read_json_box(BoxValue, PortValue, WireValue, subnode)
+    box, subports = parse_json_box(BoxValue, PortValue, WireValue, subnode)
     v = add_box!(diagram, box)
     for (key, port_data) in subports
       all_ports[key] = Port(v, port_data.kind, port_data.port)
@@ -145,7 +157,7 @@ function read_json_box(
 
   # Read the edges.
   for edge in node["edges"]
-    value = read_json_graph_data(WireValue, edge)
+    value = parse_json_graph_data(WireValue, edge)
     source = all_ports[(edge["source"], edge["sourcePort"])]
     target = all_ports[(edge["target"], edge["targetPort"])]
     add_wire!(diagram, Wire(value, source, target))
@@ -154,14 +166,14 @@ function read_json_box(
   (diagram, ports)
 end
 
-function read_json_ports(PortValue::Type, node::AbstractDict)
+function parse_json_ports(PortValue::Type, node::AbstractDict)
   ports = Dict{Tuple{String,String},PortEdgeData}()
   input_ports, output_ports = PortValue[], PortValue[]
   node_id = node["id"]
   for port in node["ports"]
     port_id = port["id"]
     port_kind = port["portkind"]
-    value = read_json_graph_data(PortValue, port)
+    value = parse_json_graph_data(PortValue, port)
     if port_kind == "input"
       push!(input_ports, value)
       ports[(node_id, port_id)] = PortEdgeData(InputPort, length(input_ports))
@@ -175,7 +187,7 @@ function read_json_ports(PortValue::Type, node::AbstractDict)
   (ports, input_ports, output_ports)
 end
 
-function read_json_graph_data(Value::Type, obj::AbstractDict)
+function parse_json_graph_data(Value::Type, obj::AbstractDict)
   convert_from_json_graph_data(Value, get(obj, "properties", Dict()))
 end
 

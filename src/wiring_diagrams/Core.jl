@@ -90,7 +90,7 @@ function Base.show(io::IO, wire::Wire)
     end
   end
   print(io, "Wire(")
-  if wire.value != nothing
+  if !isnothing(wire.value)
     show(io, wire.value)
     print(io, ", ")
   end
@@ -172,7 +172,7 @@ Box(inputs::Vector, outputs::Vector) = Box(nothing, inputs, outputs)
 
 function Base.show(io::IO, box::Box)
   print(io, "Box(")
-  if box.value != nothing
+  if !isnothing(box.value)
     show(io, box.value)
     print(io, ", ")
   end
@@ -198,23 +198,31 @@ between the source and target boxes.
 """
 mutable struct WiringDiagram <: AbstractBox
   graph::MetaDiGraph
+  value::Any
   input_ports::Vector
   output_ports::Vector
   input_id::Int
   output_id::Int
   
-  function WiringDiagram(input_ports::Vector, output_ports::Vector)
+  function WiringDiagram(value::Any, input_ports::Vector, output_ports::Vector)
     graph = MetaDiGraph()
-    diagram = new(graph, input_ports, output_ports, 1, 2)
+    diagram = new(graph, value, input_ports, output_ports, 1, 2)
     add_vertices!(graph, 2)
     return diagram
   end
   function WiringDiagram(d::WiringDiagram)
     # Copy constructor for shallow copy.
-    new(copy(d.graph), d.input_ports, d.output_ports, d.input_id, d.output_id)
+    graph = copy(d.graph)
+    new(graph, d.value, d.input_ports, d.output_ports, d.input_id, d.output_id)
   end
 end
 
+function WiringDiagram(input_ports::Vector, output_ports::Vector)
+  WiringDiagram(nothing, input_ports, output_ports)
+end
+function WiringDiagram(value::Any, inputs::Ports, outputs::Ports)
+  WiringDiagram(value, inputs.ports, outputs.ports)
+end
 function WiringDiagram(inputs::Ports, outputs::Ports)
   WiringDiagram(inputs.ports, outputs.ports)
 end
@@ -232,7 +240,7 @@ See also: `is_permuted_equal`
 function Base.:(==)(d1::WiringDiagram, d2::WiringDiagram)
   (input_ports(d1) == input_ports(d2) && output_ports(d1) == output_ports(d2) &&
    input_id(d1) == input_id(d2) && output_id(d1) == output_id(d2) &&
-   graph(d1) == graph(d2) &&
+   d1.value == d2.value && graph(d1) == graph(d2) &&
    boxes(d1) == boxes(d2) && sort!(wires(d1)) == sort!(wires(d2)))
 end
 
@@ -262,7 +270,12 @@ Base.copy(diagram::WiringDiagram) = WiringDiagram(diagram)
 
 function Base.show(io::IO, diagram::WiringDiagram)
   sshowcompact = x -> sprint(show, x, context=:compact => true)
-  print(io, "WiringDiagram([")
+  print(io, "WiringDiagram(")
+  if !isnothing(diagram.value)
+    show(io, diagram.value)
+    print(io, ", ")
+  end
+  print(io, "[")
   join(io, map(sshowcompact, input_ports(diagram)), ",")
   print(io, "], [")
   join(io, map(sshowcompact, output_ports(diagram)), ",")
@@ -598,8 +611,7 @@ function _encapsulate_in_diagram!(d::WiringDiagram, vs::Vector{Int}, value::Any)
     encapsulated_ports(d, vs, sub_vertex)
   
   # Add encapsulating diagram to original diagram.
-  # FIXME: Diagram value not currently supported, so `value` is ignored.
-  sub = WiringDiagram(inputs, outputs)
+  sub = WiringDiagram(value, inputs, outputs)
   @assert add_box!(d, sub) == sub_vertex
   
   # Add boxes to encapsulating diagram.

@@ -11,15 +11,15 @@ Thus, this module has the nature of a hack. While it may be useful for
 interactive and exploratory work, it should not be used in a production system.
 """
 module YFilesWiringDiagrams
-export read_yfiles_diagram
+export read_yfiles_diagram, parse_yfiles_diagram
 
 using Compat
 using LightXML
 using LightGraphs, MetaGraphs
 
 using ..WiringDiagramCore
-using ..GraphMLWiringDiagrams: convert_from_graphml_data, read_graphml_metagraph
-import ..GraphMLWiringDiagrams: read_graphml_data_value
+using ..GraphMLWiringDiagrams: convert_from_graphml_data, parse_graphml_metagraph
+import ..GraphMLWiringDiagrams: parse_graphml_data_value
 
 # Data types
 ############
@@ -33,9 +33,18 @@ end
 # Deserialization
 #################
 
-""" Read a wiring diagram in the GraphML dialect of yEd and yFiles.
+""" Read a wiring diagram from a GraphML file created by yEd and yFiles.
 """
-function read_yfiles_diagram(BoxValue::Type, WireValue::Type, xdoc::XMLDocument;
+function read_yfiles_diagram(BoxValue::Type, WireValue::Type, filename::String; kw...)
+  parse_yfiles_diagram(BoxValue, WireValue, LightXML.parse_file(filename); kw...)
+end
+
+""" Parse a wiring diagram from a GraphML string or XML doc created by yFiles.
+"""
+function parse_yfiles_diagram(BoxValue::Type, WireValue::Type, s::AbstractString; kw...)
+  parse_yfiles_diagram(BoxValue, WireValue, LightXML.parse_string(s); kw...)
+end
+function parse_yfiles_diagram(BoxValue::Type, WireValue::Type, xdoc::XMLDocument;
     direction::Symbol=:vertical, keep_labels::Bool=true)::WiringDiagram
   @assert direction in (:horizontal, :vertical)
   
@@ -54,7 +63,7 @@ function read_yfiles_diagram(BoxValue::Type, WireValue::Type, xdoc::XMLDocument;
   end
   
   # Read the diagram's underlying graph as an attributed graph.
-  graph = read_graphml_metagraph(xdoc, directed=true, multigraph=true)
+  graph = parse_graphml_metagraph(xdoc, directed=true, multigraph=true)
   
   # Extract needed information from yFiles' "nodegraphics" and "edgegraphics"
   # and discard the rest. Keep custom data properties, except the blank
@@ -124,9 +133,6 @@ function read_yfiles_diagram(BoxValue::Type, WireValue::Type, xdoc::XMLDocument;
   
   diagram
 end
-function read_yfiles_diagram(BoxValue::Type, WireValue::Type, filename::String; kw...)
-  read_yfiles_diagram(BoxValue, WireValue, LightXML.parse_file(filename); kw...)
-end
 
 function infer_input_ports(graph::MetaDiGraph, v::Int)
   in_edges = (get_prop(graph, u, v, :edges) for u in inneighbors(graph, v))
@@ -148,7 +154,7 @@ function infer_ports_from_coordinates(coords::Vector{T}) where T
   (ports, coord_map)
 end
 
-function read_graphml_data_value(::Type{Val{:yfiles_nodegraphics}}, xdata::XMLElement)
+function parse_graphml_data_value(::Type{Val{:yfiles_nodegraphics}}, xdata::XMLElement)
   ynode = first(child_elements(xdata)) # e.g., ShapeNode
   ygeom = find_element(ynode, "Geometry")
   data = Dict{Symbol,Any}(
@@ -164,7 +170,7 @@ function read_graphml_data_value(::Type{Val{:yfiles_nodegraphics}}, xdata::XMLEl
   data
 end
 
-function read_graphml_data_value(::Type{Val{:yfiles_edgegraphics}}, xdata::XMLElement)
+function parse_graphml_data_value(::Type{Val{:yfiles_edgegraphics}}, xdata::XMLElement)
   yedge = first(child_elements(xdata)) # e.g., PolyLineEdge
   ypath = find_element(yedge, "Path")
   data = Dict{Symbol,Any}(
