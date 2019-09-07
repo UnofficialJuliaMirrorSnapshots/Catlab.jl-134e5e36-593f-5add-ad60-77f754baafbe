@@ -19,6 +19,7 @@ using ...Syntax
 using ...Doctrines: id, compose, otimes, munit
 using ...Doctrines.Permutations
 using ..WiringDiagramCore, ..WiringLayers
+import ..WiringDiagramCore: to_wiring_diagram
 using ..WiringDiagramAlgorithms: crossing_minimization_by_sort
 
 # Expression -> Diagram
@@ -34,7 +35,7 @@ function to_wiring_diagram(expr::GATExpr)
   functor((Ports, WiringDiagram), expr;
     terms = Dict(
       :Ob => expr -> Ports([first(expr)]),
-      :Hom => expr -> WiringDiagram(expr),
+      :Hom => expr -> to_wiring_diagram(Box(expr)),
     )
   )
 end
