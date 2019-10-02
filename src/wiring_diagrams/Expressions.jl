@@ -16,11 +16,12 @@ using Compat
 using LightGraphs
 
 using ...Syntax
-using ...Doctrines: id, compose, otimes, munit
+using ...Doctrines: id, compose, otimes, munit, mcopy, mmerge, create, delete
 using ...Doctrines.Permutations
 using ..WiringDiagramCore, ..WiringLayers
 import ..WiringLayers: to_wiring_diagram
-using ..WiringDiagramAlgorithms: crossing_minimization_by_sort
+using ..WiringDiagramAlgorithms: Junction, add_junctions!,
+  crossing_minimization_by_sort
 
 # Expression -> Diagram
 #######################
@@ -46,40 +47,71 @@ end
 """ Convert a wiring diagram into a morphism expression.
 """
 function to_hom_expr(Ob::Type, Hom::Type, d::WiringDiagram)
-  box_to_expr(box::Box) = to_hom_expr(Ob, Type, box)
+  box_to_expr(v::Int) = to_hom_expr(Ob, Hom, box(d,v))
   
+  # Step 0: Reduction: Add junction nodes to ensure any wiring layer between
+  # two boxes is a permutation.
   d = copy(d)
+  add_junctions!(d)
+  
+  # Special case: no boxes.
+  if nboxes(d) == 0
+    return hom_expr_between(Ob, d, input_id(d), output_id(d))
+  end
+  
+  # Step 1. Transitive reduction.
   transitive_reduction!(Ob, d)
 
+  # Step 2. Alternating series- and parallel-reduction.
   n = nboxes(d)
   while true
     parallel_reduction!(Ob, Hom, d)
     series_reduction!(Ob, Hom, d)
-    
     # Repeat until the box count stops decreasing.
     nboxes(d) >= n && break
     n = nboxes(d)
   end
   
-  @assert nboxes(d) == 1
+  # Termination: process all remaining boxes (always at least one, and exactly
+  # one if there is no creation or deletion).
+  if nboxes(d) > 1
+    product = otimes(map(box_to_expr, box_ids(d)))
+    encapsulate!(d, box_ids(d), discard_boxes=true, value=product)
+  end
   v = first(box_ids(d))
-  f = to_hom_expr(Ob, Hom, box(d,v))
-  in_expr = hom_expr_between(Ob, d, input_id(d), v)
-  out_expr = hom_expr_between(Ob, d, v, output_id(d))
-  foldl(compose_simplify_id, [in_expr, f, out_expr])
+  foldl(compose_simplify_id, [
+    hom_expr_between(Ob, d, input_id(d), v),
+    box_to_expr(v),
+    hom_expr_between(Ob, d, v, output_id(d)),
+  ])
 end
 function to_hom_expr(Syntax::Module, d::WiringDiagram)
   to_hom_expr(Syntax.Ob, Syntax.Hom, d)
+end
+
+function to_hom_expr(Ob::Type, Hom::Type, box::Box)
+  if box.value isa Hom
+    box.value
+  else
+    dom = otimes(ports_to_obs(Ob, input_ports(box)))
+    codom = otimes(ports_to_obs(Ob, output_ports(box)))
+    Hom(box.value, dom, codom)
+  end
+end
+function to_hom_expr(Ob::Type, Hom::Type, junction::Junction)
+  junction_to_expr(Ob, junction)
 end
 
 """ All possible parallel reductions of a wiring diagram.
 """
 function parallel_reduction!(Ob::Type, Hom::Type, d::WiringDiagram)
   parallel = Vector{Int}[]
-  products = map(collect(find_parallel(graph(d)))) do ((source, target), vs)
+  parallel_unsorted = find_parallel(graph(d), source=input_id(d), sink=output_id(d))
+  products = map(collect(parallel_unsorted)) do ((source, target), vs)
     exprs = Hom[ to_hom_expr(Ob, Hom, box(d,v)) for v in vs ]
-    # FIXME: Do two-sided crossing minimization, not one-sided.
-    σ = crossing_minimization_by_sort(d, [source], vs)
+    σ = crossing_minimization_by_sort(d, vs,
+      sources = isnothing(source) ? Int[] : [source],
+      targets = isnothing(target) ? Int[] : [target])
     push!(parallel, vs[σ])
     otimes(exprs[σ])
   end
@@ -119,7 +151,7 @@ function transitive_reduction!(Ob::Type, d::WiringDiagram)
     if !has_edge(reduced, edge)
       for wire in wires(d, edge)
         value = port_value(d, wire.source) # =?= port_value(d, wire.target)
-        v = add_box!(d, Box(id(coerce_ob(Ob, value)), [value], [value]))
+        v = add_box!(d, Junction(value, 1, 1))
         add_wire!(d, Wire(wire.source => Port(v,InputPort,1)))
         add_wire!(d, Wire(Port(v,OutputPort,1) => wire.target))
         rem_wire!(d, wire)
@@ -129,21 +161,19 @@ function transitive_reduction!(Ob::Type, d::WiringDiagram)
   return d
 end
 
+""" Morphism expression for wires between two boxes.
+
+Assumes that the wires form a permutation morphism.
+"""
 function hom_expr_between(Ob::Type, diagram::WiringDiagram, v1::Int, v2::Int)
   layer = wiring_layer_between(diagram, v1, v2)
   inputs = ports_to_obs(Ob, output_ports(diagram, v1))
   outputs = ports_to_obs(Ob, input_ports(diagram, v2))
-  to_hom_expr(layer, inputs, outputs)
-end
-
-function to_hom_expr(Ob::Type, Hom::Type, box::Box)
-  if box.value isa Hom
-    box.value
-  else
-    dom = otimes(ports_to_obs(Ob, input_ports(box)))
-    codom = otimes(ports_to_obs(Ob, output_ports(box)))
-    Hom(box.value, dom, codom)
-  end
+  
+  σ = to_permutation(layer)
+  @assert !isnothing(σ) "Conversion of non-permutation not implemented"
+  @assert inputs == outputs[σ]
+  permutation_to_expr(σ, inputs)
 end
 
 coerce_ob(Ob::Type, x) = x isa Ob ? x : Ob(Ob,x)
@@ -153,20 +183,6 @@ function compose_simplify_id(f::GATExpr, g::GATExpr)
   if head(f) == :id; g
   elseif head(g) == :id; f
   else compose(f,g) end
-end
-
-# Layer -> Expression
-#####################
-
-""" Convert a wiring layer into a morphism expression.
-
-The `inputs` and `outputs` are corresponding vectors of object expressions.
-"""
-function to_hom_expr(layer::WiringLayer, inputs::Vector, outputs::Vector)
-  σ = to_permutation(layer)
-  @assert !isnothing(σ) "Conversion of non-permutation not implemented"
-  @assert inputs == outputs[σ]
-  permutation_to_expr(σ, inputs)
 end
 
 """ Convert a wiring layer into a permutation, if it is one.
@@ -188,14 +204,51 @@ function to_permutation(layer::WiringLayer)::Union{Nothing,Vector{Int}}
   return σ
 end
 
+""" Convert a junction node to a morphism expression.
+"""
+function junction_to_expr(Ob::Type, junction::Junction)
+  ob = coerce_ob(Ob, junction.value)
+  compose_simplify_id(
+    mmerge_foldl(ob, junction.ninputs),
+    mcopy_foldl(ob, junction.noutputs)
+  )
+end
+
+# FIXME: These functions belong elsewhere, probably in the standard library.
+function mcopy_foldl(A, n::Int)
+  @assert n >= 0
+  if n > 2
+    compose(mcopy(A), otimes(mcopy_foldl(A, n-1), id(A)))
+  elseif n == 2
+    mcopy(A)
+  elseif n == 1
+    id(A)
+  else # n == 0
+    delete(A)
+  end
+end
+function mmerge_foldl(A, n::Int)
+  @assert n >= 0
+  if n > 2
+    compose(otimes(mmerge_foldl(A, n-1), id(A)), mmerge(A))
+  elseif n == 2
+    mmerge(A)
+  elseif n == 1
+    id(A)
+  else # n == 0
+    create(A)
+  end
+end
+
 # Graph operations
 ##################
 
 """ Find parallel compositions in a directed graph.
 """
-function find_parallel(g::DiGraph)::Dict{Pair{Int,Int},Vector{Int}}
-  parallel = Dict{Pair{Int,Int},Vector{Int}}()
+function find_parallel(g::DiGraph; source=nothing, sink=nothing)
+  parallel = Dict{Pair{Union{Int,Nothing},Union{Int,Nothing}},Vector{Int}}()
   for v in 1:nv(g)
+    if v in (source, sink); continue end
     # Note: The definition in the literature on series-parallel digraphs
     # requires that `length(v_in) == 1 && length(v_out) == 1`.
     # Replacing the conjunction with a disjunction allows more general
@@ -203,8 +256,8 @@ function find_parallel(g::DiGraph)::Dict{Pair{Int,Int},Vector{Int}}
     # parallel in more than one place.
     v_in, v_out = inneighbors(g,v), outneighbors(g,v)
     if length(v_in) == 1 || length(v_out) == 1
-      for u in v_in
-        for w in v_out
+      for u in (isempty(v_in) ? [nothing] : v_in)
+        for w in (isempty(v_out) ? [nothing] : v_out)
           push!(get!(parallel, u => w, Int[]), v)
         end
       end

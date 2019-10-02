@@ -45,6 +45,12 @@ end
 An *adjacent transposition*, also known as a *simple transposition*, is a
 transposition of form (i i+1), represented here as simply the number i.
 
+Bubble sort and insertion sort are, in a sense, dual algorithms (Knuth, TAOCP,
+Vol 3: Searching and Sort, Sec 5.3.4: Networks for sorting, Figures 45 & 46). A
+minimal example on which they give different decompositions is the permutation:
+
+  [1,2,3] ↦ [3,2,1]
+
 See also: `decompose_permutation_by_bubble_sort!`
 """
 function decompose_permutation_by_insertion_sort!(σ::Vector{Int})::Vector{Int}
@@ -66,16 +72,22 @@ end
 
 """ Convert a typed permutation into a morphism expression.
 
-FIXME: The resulting expression is not simplified.
+Warning: The morphism expression is not simplified.
 """
-function permutation_to_expr(σ::Vector{Int}, xs::Vector)
-  permutation_to_expr!(copy(σ), copy(xs))
+function permutation_to_expr(σ::Vector{Int}, xs::Vector; sort::Symbol=:insertion)
+  permutation_to_expr!(copy(σ), copy(xs); sort=sort)
 end
-function permutation_to_expr!(σ::Vector{Int}, xs::Vector)
+function permutation_to_expr!(σ::Vector{Int}, xs::Vector; sort::Symbol=:insertion)
   n = length(σ)
   @assert length(xs) == n
   
-  transpositions = decompose_permutation_by_bubble_sort!(σ)
+  transpositions = if sort == :bubble
+    decompose_permutation_by_bubble_sort!(σ)
+  elseif sort == :insertion
+    decompose_permutation_by_insertion_sort!(σ)
+  else
+    error("Sorting algorithm not supported: $sort")
+  end
   if isempty(transpositions)
     return id(otimes(xs))
   end

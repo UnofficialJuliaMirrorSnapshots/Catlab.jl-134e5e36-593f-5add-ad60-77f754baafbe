@@ -10,7 +10,7 @@ using Catlab.WiringDiagrams.WiringDiagramExpressions: find_parallel,
 # Expression -> Diagram
 #######################
 
-A, B, C, D = Ob(FreeSymmetricMonoidalCategory, :A, :B, :C, :D)
+A, B, C = Ob(FreeSymmetricMonoidalCategory, :A, :B, :C)
 f, g = Hom(:f,A,B), Hom(:g,B,C)
 
 # Functorality of conversion.
@@ -24,12 +24,17 @@ fd, gd = singleton_diagram(Box(f)), singleton_diagram(Box(g))
 #######################
 
 function roundtrip(f::HomExpr)
-  to_hom_expr(FreeSymmetricMonoidalCategory, to_wiring_diagram(f))
+  to_hom_expr(FreeBiproductCategory, to_wiring_diagram(f))
 end
 
+A, B, C, D = Ob(FreeBiproductCategory, :A, :B, :C, :D)
+I = munit(FreeBiproductCategory.Ob)
 f, g, h, k = Hom(:f,A,B), Hom(:g,B,C), Hom(:h,C,D), Hom(:k,D,C)
 
-# Base cases.
+# Monoidal category
+#------------------
+
+# Base case.
 @test roundtrip(f) == f
 
 # Series reduction.
@@ -83,19 +88,47 @@ m = Hom(:m, otimes(A,A), A)
 expr = compose(otimes(m,id(otimes(A,A))), otimes(m,id(A)), m)
 @test roundtrip(expr) == ((((m ⊗ id(A)) ⋅ m) ⊗ id(A)) ⋅ m)
 
-# Layer -> Expression
-#####################
+# Identities.
+@test roundtrip(id(A)) == id(A)
+@test roundtrip(otimes(id(A),id(B))) == id(otimes(A,B))
 
-# Identity.
-layer = id(NLayer(2))
-@test to_hom_expr(layer, [A,B], [A,B]) == id(otimes(A,B))
+# Monoidal units.
+@test roundtrip(Hom(:m,A,I)) == Hom(:m,A,I)
+@test roundtrip(Hom(:m,I,B)) == Hom(:m,I,B)
+@test roundtrip(Hom(:m,I,I)) == Hom(:m,I,I)
+@test roundtrip(Hom(:m,I,B)⋅Hom(:n,B,I)) == Hom(:m,I,B)⋅Hom(:n,B,I)
+@test roundtrip(Hom(:m,A,I)⋅Hom(:n,I,B)) == Hom(:m,A,I)⊗Hom(:n,I,B)
+@test roundtrip(Hom(:m,I,I)⊗Hom(:n,I,I)) == Hom(:m,I,I)⊗Hom(:n,I,I)
+
+# Symmetric monoidal category
+#----------------------------
 
 # Braidings.
-layer = braid(NLayer(1),NLayer(1))
-@test to_hom_expr(layer, [A,B], [B,A]) == braid(A,B)
+@test roundtrip(braid(A,B)) == braid(A,B)
+@test roundtrip(otimes(id(A),braid(B,C))) == otimes(id(A),braid(B,C))
 
-layer = otimes(id(NLayer(1)), braid(NLayer(1),NLayer(1)))
-@test to_hom_expr(layer, [A,B,C], [A,C,B]) == otimes(id(A),braid(B,C))
+# Diagonals and codiagonals
+#--------------------------
+
+# Diagonals.
+@test roundtrip(mcopy(A)) == mcopy(A)
+@test roundtrip(delete(A)) == delete(A)
+@test roundtrip(mcopy(A)⋅(mcopy(A)⊗id(A))) == mcopy(A)⋅(mcopy(A)⊗id(A))
+@test roundtrip(mcopy(A)⋅(id(A)⊗mcopy(A))) == mcopy(A)⋅(mcopy(A) ⊗ id(A))
+@test roundtrip(mcopy(A⊗B)) == (mcopy(A)⊗mcopy(B))⋅(id(A)⊗braid(A,B)⊗id(B))
+@test roundtrip(delete(A⊗B)) == delete(A)⊗delete(B)
+
+# Codiagonals.
+@test roundtrip(mmerge(A)) == mmerge(A)
+@test roundtrip(create(A)) == create(A)
+@test roundtrip((mmerge(A)⊗id(A)⋅mmerge(A))) == (mmerge(A)⊗id(A))⋅mmerge(A)
+@test roundtrip((id(A)⊗mmerge(A))⋅mmerge(A)) == (mmerge(A)⊗id(A))⋅mmerge(A)
+
+# Compound morphisms.
+@test roundtrip(compose(f,mcopy(B))) == compose(f,mcopy(B))
+@test roundtrip(compose(mcopy(A),otimes(f,f))) == compose(mcopy(A),otimes(f,f))
+@test roundtrip(compose(f,delete(B))) == compose(f,delete(B))
+@test roundtrip(braid(A,B)⋅(mcopy(B)⊗mcopy(A))) == braid(A,B)⋅(mcopy(B)⊗mcopy(A))
 
 # Graph operations
 ##################
